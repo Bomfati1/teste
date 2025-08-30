@@ -51,12 +51,19 @@ exports.createOrUpdatePermission = asyncHandler(async (req, res, next) => {
   }
 
   // 4. Se tudo estiver válido, cria ou atualiza a permissão
-  // Usamos rawResult: true para saber se o documento foi criado ou atualizado
-  const result = await Permission.findOneAndUpdate(
-    { user: userId, system: systemId }, // Critério de busca
-    { $set: { roles: roles } }, // Dados para atualizar/inserir
-    { new: true, upsert: true, runValidators: true, rawResult: true } // Opções
-  );
+  // Primeiro verifica se já existe uma permissão para este usuário e sistema
+  let permission = await Permission.findOne({ user: userId, system: systemId });
+  let wasCreated = false;
+
+  if (permission) {
+    // Atualiza a permissão existente
+    permission.roles = roles;
+    await permission.save();
+  } else {
+    // Cria uma nova permissão
+    permission = await Permission.create({ user: userId, system: systemId, roles });
+    wasCreated = true;
+  }
 
   // 5. Invalida o cache de listagem de usuários, pois as permissões mudaram
   if (redisClient && redisClient.isReady) {
@@ -66,16 +73,13 @@ exports.createOrUpdatePermission = asyncHandler(async (req, res, next) => {
     );
   }
 
-  // 6. Popula o resultado para uma resposta mais rica, de forma mais eficiente
-  // Chamamos .populate() diretamente no documento retornado pelo findOneAndUpdate,
-  // evitando uma nova consulta ao banco de dados.
-  const permission = await result.value.populate([
+  // 6. Popula o resultado para uma resposta mais rica
+  await permission.populate([
     { path: "user", select: "name email" },
     { path: "system", select: "name" },
   ]);
 
-  // 7. Determina o status code e a mensagem corretos (201 para criado, 200 para atualizado)
-  const wasCreated = result.lastErrorObject.upserted;
+  // 7. Determina o status code e a mensagem corretos
   const statusCode = wasCreated ? 201 : 200;
   const message = wasCreated
     ? "Permissão criada com sucesso."
