@@ -2,6 +2,7 @@
 const Permission = require("../models/Permission");
 const User = require("../models/User");
 const mongoose = require("mongoose");
+const { redisClient } = require("../config/redis"); // 1. Importamos o cliente Redis
 const { validationResult } = require("express-validator");
 
 const asyncHandler = require("../middleware/asyncHandler");
@@ -33,34 +34,85 @@ exports.createUser = asyncHandler(async (req, res, next) => {
 
 // Função para listar todos os usuários
 exports.getAllUsers = asyncHandler(async (req, res, next) => {
-  console.log("Buscando usuários e suas permissões do MongoDB.");
+  const cacheKey = "users:all_with_permissions"; // Chave única para este cache
 
-  // 1. Busca todas as permissões, populando os detalhes do sistema
-  const allPermissions = await Permission.find({})
-    .populate("system", "name")
-    .select("user system roles");
-
-  // 2. Agrupa as permissões por ID de usuário para fácil acesso
-  const permissionsMap = new Map();
-  allPermissions.forEach((perm) => {
-    const userId = perm.user.toString();
-    if (!permissionsMap.has(userId)) {
-      permissionsMap.set(userId, []);
+  // 2. Tenta buscar os dados do cache primeiro
+  if (redisClient && redisClient.isReady) {
+    const cachedData = await redisClient.get(cacheKey);
+    if (cachedData) {
+      console.log("Cache HIT para usuários.");
+      res.setHeader("X-Cache", "HIT"); // Adiciona o header
+      return res.status(200).json(JSON.parse(cachedData));
     }
-    permissionsMap.get(userId).push({
-      system: perm.system,
-      roles: perm.roles,
+  }
+
+  // 3. Se não encontrou no cache (MISS), busca do banco de dados
+  console.log("Cache MISS. Buscando usuários e suas permissões do MongoDB.");
+  res.setHeader("X-Cache", "MISS"); // Adiciona o header
+
+  // Lógica Otimizada com Aggregation Pipeline do MongoDB
+  const usersWithPermissions = await User.aggregate([
+    {
+      $lookup: {
+        from: "permissions", // O nome da coleção de permissões
+        localField: "_id",
+        foreignField: "user",
+        as: "permissions",
+      },
+    },
+    {
+      $unwind: {
+        path: "$permissions",
+        preserveNullAndEmptyArrays: true, // Mantém usuários mesmo que não tenham permissões
+      },
+    },
+    {
+      $lookup: {
+        from: "systems", // O nome da coleção de sistemas
+        localField: "permissions.system",
+        foreignField: "_id",
+        as: "permissions.system",
+      },
+    },
+    {
+      $unwind: {
+        path: "$permissions.system",
+        preserveNullAndEmptyArrays: true,
+      },
+    },
+    {
+      $group: {
+        _id: "$_id",
+        name: { $first: "$name" },
+        email: { $first: "$email" },
+        createdAt: { $first: "$createdAt" },
+        updatedAt: { $first: "$updatedAt" },
+        permissions: {
+          $push: {
+            $cond: [
+              { $ifNull: ["$permissions._id", false] },
+              {
+                system: "$permissions.system",
+                roles: "$permissions.roles",
+                _id: "$permissions._id",
+              },
+              "$$REMOVE",
+            ],
+          },
+        },
+      },
+    },
+    { $sort: { name: 1 } },
+  ]);
+
+  // 4. Salva o resultado no cache antes de enviar a resposta
+  if (redisClient && redisClient.isReady) {
+    // Define um TTL (Time To Live) de 5 minutos (300 segundos)
+    await redisClient.set(cacheKey, JSON.stringify(usersWithPermissions), {
+      EX: 300,
     });
-  });
-
-  // 3. Busca todos os usuários
-  const users = await User.find({}, { __v: 0 }).lean(); // .lean() para objetos JS puros
-
-  // 4. Combina os usuários com suas permissões
-  const usersWithPermissions = users.map((user) => ({
-    ...user,
-    permissions: permissionsMap.get(user._id.toString()) || [], // Adiciona um array vazio se não houver permissões
-  }));
+    console.log("Resultado da listagem de usuários salvo no cache.");
+  }
 
   res.status(200).json(usersWithPermissions);
 });
@@ -75,17 +127,43 @@ exports.deleteUser = asyncHandler(async (req, res, next) => {
     return res.status(400).json({ message: "ID de usuário inválido." });
   }
 
-  // 2. Pedimos ao Mongoose para encontrar um usuário com esse ID e deletá-lo.
-  const user = await User.findByIdAndDelete(userId);
+  // Usar uma transação para garantir que ou o usuário e suas permissões são deletados, ou nada é.
+  // Nota: Transações no MongoDB requerem um replica set.
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
-  // 3. Verificamos se um usuário foi realmente encontrado e deletado.
-  if (!user) {
-    // Se 'user' for nulo, significa que não encontramos um usuário com esse ID.
-    return res.status(404).json({ message: "Usuário não encontrado." });
+  try {
+    // 2. Pedimos ao Mongoose para encontrar um usuário com esse ID e deletá-lo.
+    const user = await User.findByIdAndDelete(userId, { session });
+
+    // 3. Verificamos se um usuário foi realmente encontrado e deletado.
+    if (!user) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ message: "Usuário não encontrado." });
+    }
+
+    // 4. Deleta as permissões associadas a este usuário para manter a integridade dos dados.
+    await Permission.deleteMany({ user: userId }, { session });
+
+    // 5. Invalida o cache de listagem de usuários
+    if (redisClient && redisClient.isReady) {
+      await redisClient.del("users:all_with_permissions");
+      console.log("Cache de usuários invalidado devido à deleção.");
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+
+    // 6. Se a deleção foi bem-sucedida, enviamos uma mensagem de sucesso.
+    res
+      .status(200)
+      .json({ message: "Usuário e suas permissões deletados com sucesso." });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    next(error); // Passa o erro para o middleware de erro global
   }
-
-  // 5. Se a deleção foi bem-sucedida, enviamos uma mensagem de sucesso.
-  res.status(200).json({ message: "Usuário deletado com sucesso." });
 });
 
 // Função para buscar um usuário pelo ID
@@ -148,6 +226,12 @@ exports.updateUser = asyncHandler(async (req, res, next) => {
 
   if (!updatedUser) {
     return res.status(404).json({ message: "Usuário não encontrado." });
+  }
+
+  // Invalida o cache de listagem de usuários se dados relevantes (nome, email) foram alterados
+  if (redisClient && redisClient.isReady && (name || email)) {
+    await redisClient.del("users:all_with_permissions");
+    console.log("Cache de usuários invalidado devido à atualização.");
   }
 
   res.status(200).json(updatedUser);

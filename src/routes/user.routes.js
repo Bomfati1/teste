@@ -16,7 +16,7 @@ const userValidationRules = [
   body("email")
     .isEmail()
     .withMessage("Forneça um endereço de e-mail válido.")
-    .normalizeEmail(), // Garante um formato padrão para o email (ex: remove pontos no gmail)
+    .normalizeEmail(),
 ];
 
 router.route("/").post(userValidationRules, createUser).get(getAllUsers);

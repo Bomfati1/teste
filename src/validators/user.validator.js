@@ -1,4 +1,3 @@
-// src/validators/user.validator.js
 const { body, validationResult } = require("express-validator");
 
 // Define as regras de validação para a criação de um usuário

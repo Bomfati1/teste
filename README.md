@@ -30,7 +30,7 @@ Pequena aplicação backend para cadastrar sistemas, cadastrar usuários e assoc
 
 ## Estrutura principal
 
-- `server.js` - ponto de entrada
+- `index.js` - ponto de entrada
 - `src/config` - configuração de DB e Redis
 - `src/models` - modelos Mongoose (`User`, `System`, `Permission`)
 - `src/controllers` - lógica das rotas
@@ -83,9 +83,9 @@ docker run -d --name teste-redis -p 6379:6379 redis:7-alpine
 4. Inicie a aplicação:
 
 ```bash
-npm run dev
-# ou
-node server.js
+npm start
+# ou, se o script "start" não estiver configurado no package.json:
+node index.js
 ```
 
 5. Teste endpoints (exemplo):

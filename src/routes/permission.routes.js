@@ -1,10 +1,10 @@
 const express = require("express");
 const {
-  // Supondo que você implementou a função createOrUpdatePermission no seu controller
-  // como sugerido na resposta anterior.
   createOrUpdatePermission,
+  getAllPermissions,
 } = require("../controllers/permission.controller.js");
 const { body } = require("express-validator");
+const cache = require("../middleware/cache.js");
 
 const router = express.Router();
 
@@ -36,5 +36,8 @@ const permissionRules = [
 // Rota para criar ou atualizar uma permissão
 // POST /api/permission
 router.post("/", permissionRules, createOrUpdatePermission);
+
+// Rota para listar todas as permissões, com cache de 60 segundos
+router.get("/", cache(60), getAllPermissions);
 
 module.exports = router;
