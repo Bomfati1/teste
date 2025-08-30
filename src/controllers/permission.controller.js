@@ -3,7 +3,7 @@ const User = require("../models/User");
 const System = require("../models/System");
 const asyncHandler = require("../middleware/asyncHandler");
 const { validationResult } = require("express-validator");
-const { redisClient } = require("../config/redis");
+const { getClient } = require("../config/redis");
 
 /**
  * @desc    Cria ou atualiza as permissões de um usuário em um sistema
@@ -65,11 +65,17 @@ exports.createOrUpdatePermission = asyncHandler(async (req, res, next) => {
     wasCreated = true;
   }
 
-  // 5. Invalida o cache de listagem de usuários, pois as permissões mudaram
+  // 5. Invalida todos os caches relacionados
+  const redisClient = getClient();
   if (redisClient && redisClient.isReady) {
+    // Invalida cache de usuários
     await redisClient.del("users:all_with_permissions");
+    // Invalida cache de permissões
+    await redisClient.del("permissions:all");
+    // Invalida cache de sistemas (pois pode afetar permissões)
+    await redisClient.del("systems:all");
     console.log(
-      "Cache de usuários invalidado devido à alteração de permissões."
+      "Caches invalidados devido à alteração de permissões."
     );
   }
 
@@ -91,14 +97,39 @@ exports.createOrUpdatePermission = asyncHandler(async (req, res, next) => {
 // @desc    Listar todas as permissões
 // @route   GET /api/permission
 exports.getAllPermissions = asyncHandler(async (req, res, next) => {
+  const cacheKey = "permissions:all";
+  
+  // Tenta buscar do cache primeiro
+  const redisClient = getClient();
+  if (redisClient && redisClient.isReady) {
+    const cachedData = await redisClient.get(cacheKey);
+    if (cachedData) {
+      console.log("Cache HIT para permissões.");
+      res.setHeader("X-Cache", "HIT");
+      return res.status(200).json(JSON.parse(cachedData));
+    }
+  }
+  
+  // Cache MISS - busca do banco
+  console.log("Cache MISS. Buscando permissões do MongoDB.");
+  res.setHeader("X-Cache", "MISS");
+
   const permissions = await Permission.find({})
     .populate("user", "name email")
     .populate("system", "name")
     .select("-__v");
 
-  res.status(200).json({
+  const response = {
     success: true,
     count: permissions.length,
     data: permissions,
-  });
+  };
+  
+  // Salva no cache
+  if (redisClient && redisClient.isReady) {
+    await redisClient.set(cacheKey, JSON.stringify(response), { EX: 300 });
+    console.log("Resultado da listagem de permissões salvo no cache.");
+  }
+
+  res.status(200).json(response);
 });

@@ -2,7 +2,7 @@
 const Permission = require("../models/Permission");
 const User = require("../models/User");
 const mongoose = require("mongoose");
-const { redisClient } = require("../config/redis"); // 1. Importamos o cliente Redis
+const { getClient } = require("../config/redis"); // 1. Importamos o cliente Redis
 const { validationResult } = require("express-validator");
 
 const asyncHandler = require("../middleware/asyncHandler");
@@ -37,6 +37,7 @@ exports.getAllUsers = asyncHandler(async (req, res, next) => {
   const cacheKey = "users:all_with_permissions"; // Chave única para este cache
 
   // 2. Tenta buscar os dados do cache primeiro
+  const redisClient = getClient();
   if (redisClient && redisClient.isReady) {
     const cachedData = await redisClient.get(cacheKey);
     if (cachedData) {
@@ -147,6 +148,7 @@ exports.deleteUser = asyncHandler(async (req, res, next) => {
     await Permission.deleteMany({ user: userId }, { session });
 
     // 5. Invalida o cache de listagem de usuários
+    const redisClient = getClient();
     if (redisClient && redisClient.isReady) {
       await redisClient.del("users:all_with_permissions");
       console.log("Cache de usuários invalidado devido à deleção.");
@@ -229,6 +231,7 @@ exports.updateUser = asyncHandler(async (req, res, next) => {
   }
 
   // Invalida o cache de listagem de usuários se dados relevantes (nome, email) foram alterados
+  const redisClient = getClient();
   if (redisClient && redisClient.isReady && (name || email)) {
     await redisClient.del("users:all_with_permissions");
     console.log("Cache de usuários invalidado devido à atualização.");
