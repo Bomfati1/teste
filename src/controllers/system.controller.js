@@ -142,7 +142,7 @@ exports.updateSystem = asyncHandler(async (req, res, next) => {
   res.status(200).json({ success: true, data: system });
 });
 
-// @desc    Deletar um sistema
+// @desc    Deletar um sistema (soft delete)
 // @route   DELETE /api/system/:id
 exports.deleteSystem = asyncHandler(async (req, res, next) => {
   if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
@@ -152,9 +152,9 @@ exports.deleteSystem = asyncHandler(async (req, res, next) => {
   const system = await System.findById(req.params.id);
 
   if (!system) {
-    return res
-      .status(404)
-      .json({ message: `Sistema com ID ${req.params.id} não encontrado.` });
+    return res.status(404).json({ 
+      message: `Sistema com ID ${req.params.id} não encontrado.` 
+    });
   }
 
   // Opcional: Verificar se o sistema está em uso em alguma permissão antes de deletar.
@@ -166,7 +166,8 @@ exports.deleteSystem = asyncHandler(async (req, res, next) => {
     });
   }
 
-  await system.deleteOne();
+  // Soft delete do sistema
+  await system.softDelete(req.user?._id); // req.user._id se você tiver autenticação
 
   // Invalida o cache de sistemas
   const redisClient = getClient();
@@ -176,5 +177,68 @@ exports.deleteSystem = asyncHandler(async (req, res, next) => {
     console.log("Cache de sistemas invalidado devido à deleção.");
   }
 
-  res.status(200).json({ success: true, data: {} });
+  res.status(200).json({ 
+    success: true, 
+    message: "Sistema deletado com sucesso.",
+    data: {
+      id: system._id,
+      deletedAt: system.deletedAt,
+      isActive: system.isActive
+    }
+  });
+});
+
+// @desc    Restaurar um sistema deletado
+// @route   PATCH /api/system/:id/restore
+exports.restoreSystem = asyncHandler(async (req, res, next) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return res.status(400).json({ message: "ID de sistema inválido." });
+  }
+
+  // Busca incluindo sistemas deletados
+  const system = await System.findById(req.params.id).setOptions({ includeDeleted: true });
+
+  if (!system) {
+    return res.status(404).json({ 
+      message: `Sistema com ID ${req.params.id} não encontrado.` 
+    });
+  }
+
+  if (system.isActive) {
+    return res.status(400).json({ 
+      message: "Este sistema já está ativo." 
+    });
+  }
+
+  // Restaura o sistema
+  await system.restore();
+
+  // Invalida cache
+  const redisClient = getClient();
+  if (redisClient && redisClient.isReady) {
+    await redisClient.del("systems:all");
+    await redisClient.del(`system:${req.params.id}`);
+    console.log("Cache de sistemas invalidado devido à restauração.");
+  }
+
+  res.status(200).json({ 
+    success: true, 
+    message: "Sistema restaurado com sucesso.",
+    data: system
+  });
+});
+
+// @desc    Listar sistemas deletados (para administradores)
+// @route   GET /api/system/deleted
+exports.getDeletedSystems = asyncHandler(async (req, res, next) => {
+  const deletedSystems = await System.find({})
+    .setOptions({ includeDeleted: true })
+    .where({ isActive: false })
+    .select("-__v");
+
+  res.status(200).json({
+    success: true,
+    count: deletedSystems.length,
+    data: deletedSystems,
+  });
 });

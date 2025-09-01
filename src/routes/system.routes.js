@@ -6,6 +6,8 @@ const {
   getSystemById,
   updateSystem,
   deleteSystem,
+  restoreSystem,
+  getDeletedSystems,
 } = require("../controllers/system.controller.js");
 
 const router = express.Router();
@@ -24,5 +26,14 @@ router
   .get(getSystemById)
   .put(systemValidationRules, updateSystem)
   .delete(deleteSystem);
+
+// Rota para deletar um sistema (soft delete)
+router.delete("/:id", deleteSystem);
+
+// Rota para restaurar um sistema deletado
+router.patch("/:id/restore", restoreSystem);
+
+// Rota para listar sistemas deletados (para administradores)
+router.get("/deleted", getDeletedSystems);
 
 module.exports = router;

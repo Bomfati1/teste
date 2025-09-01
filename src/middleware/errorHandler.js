@@ -10,10 +10,32 @@ const errorHandler = (err, req, res, next) => {
     statusCode = 404;
   }
 
+  // Erro de JSON malformado (body-parser)
+  if (err.type === 'entity.parse.failed') {
+    message = "JSON malformado ou body vazio na requisição";
+    statusCode = 400;
+  }
+
+  // Erro de sintaxe JSON
+  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+    message = "JSON inválido na requisição";
+    statusCode = 400;
+  }
+
+  // Erro de body muito grande
+  if (err.type === 'entity.too.large') {
+    message = "Body da requisição muito grande";
+    statusCode = 413;
+  }
+
   res.status(statusCode).json({
     message: message,
+    error: {
+      type: err.type || err.name,
+      statusCode: statusCode
+    },
     // Only show the stack trace in development mode for security
-    stack: process.env.NODE_ENV === "production" ? null : err.stack,
+    stack: process.env.NODE_ENV === "development" ? err.stack : null,
   });
 };
 

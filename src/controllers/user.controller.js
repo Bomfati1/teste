@@ -32,93 +32,97 @@ exports.createUser = asyncHandler(async (req, res, next) => {
   res.status(201).json(newUser);
 });
 
-// Função para listar todos os usuários
+/**
+ * @desc    Listar todos os usuários ativos
+ * @route   GET /api/user
+ */
 exports.getAllUsers = asyncHandler(async (req, res, next) => {
-  const cacheKey = "users:all_with_permissions"; // Chave única para este cache
-
-  // 2. Tenta buscar os dados do cache primeiro
+  const cacheKey = "users:all_with_permissions";
+  
+  // Tenta buscar do cache primeiro
   const redisClient = getClient();
   if (redisClient && redisClient.isReady) {
     const cachedData = await redisClient.get(cacheKey);
     if (cachedData) {
-      console.log("Cache HIT para usuários.");
-      res.setHeader("X-Cache", "HIT"); // Adiciona o header
+      res.setHeader("X-Cache", "HIT");
       return res.status(200).json(JSON.parse(cachedData));
     }
   }
+  
+  // Cache MISS - busca do banco usando método customizado
+  res.setHeader("X-Cache", "MISS");
 
-  // 3. Se não encontrou no cache (MISS), busca do banco de dados
-  console.log("Cache MISS. Buscando usuários e suas permissões do MongoDB.");
-  res.setHeader("X-Cache", "MISS"); // Adiciona o header
+  const users = await User.findActive()
+    .populate({
+      path: 'permissions',
+      match: { isActive: true, deletedAt: null },
+      populate: {
+        path: 'system',
+        select: 'name availableRoles',
+        match: { isActive: true, deletedAt: null }
+      }
+    })
+    .select("-__v");
 
-  // Lógica Otimizada com Aggregation Pipeline do MongoDB
-  const usersWithPermissions = await User.aggregate([
-    {
-      $lookup: {
-        from: "permissions", // O nome da coleção de permissões
-        localField: "_id",
-        foreignField: "user",
-        as: "permissions",
-      },
-    },
-    {
-      $unwind: {
-        path: "$permissions",
-        preserveNullAndEmptyArrays: true, // Mantém usuários mesmo que não tenham permissões
-      },
-    },
-    {
-      $lookup: {
-        from: "systems", // O nome da coleção de sistemas
-        localField: "permissions.system",
-        foreignField: "_id",
-        as: "permissions.system",
-      },
-    },
-    {
-      $unwind: {
-        path: "$permissions.system",
-        preserveNullAndEmptyArrays: true,
-      },
-    },
-    {
-      $group: {
-        _id: "$_id",
-        name: { $first: "$name" },
-        email: { $first: "$email" },
-        createdAt: { $first: "$createdAt" },
-        updatedAt: { $first: "$updatedAt" },
-        permissions: {
-          $push: {
-            $cond: [
-              { $ifNull: ["$permissions._id", false] },
-              {
-                system: "$permissions.system",
-                roles: "$permissions.roles",
-                _id: "$permissions._id",
-              },
-              "$$REMOVE",
-            ],
-          },
-        },
-      },
-    },
-    { $sort: { name: 1 } },
-  ]);
-
-  // 4. Salva o resultado no cache antes de enviar a resposta
+  const response = {
+    success: true,
+    count: users.length,
+    data: users,
+  };
+  
+  // Salva no cache
   if (redisClient && redisClient.isReady) {
-    // Define um TTL (Time To Live) de 5 minutos (300 segundos)
-    await redisClient.set(cacheKey, JSON.stringify(usersWithPermissions), {
-      EX: 300,
-    });
-    console.log("Resultado da listagem de usuários salvo no cache.");
+    await redisClient.set(cacheKey, JSON.stringify(response), { EX: 300 });
   }
 
-  res.status(200).json(usersWithPermissions);
+  res.status(200).json(response);
 });
 
-// Função para deletar um usuário pelo ID
+/**
+ * @desc    Listar todos os usuários (incluindo deletados)
+ * @route   GET /api/user/all
+ */
+exports.getAllUsersIncludeDeleted = asyncHandler(async (req, res, next) => {
+  const cacheKey = "users:all_with_permissions_include_deleted";
+  
+  // Tenta buscar do cache primeiro
+  const redisClient = getClient();
+  if (redisClient && redisClient.isReady) {
+    const cachedData = await redisClient.get(cacheKey);
+    if (cachedData) {
+      res.setHeader("X-Cache", "HIT");
+      return res.status(200).json(JSON.parse(cachedData));
+    }
+  }
+  
+  // Cache MISS - busca do banco usando método customizado
+  res.setHeader("X-Cache", "MISS");
+
+  const users = await User.findAll()
+    .populate({
+      path: 'permissions',
+      populate: {
+        path: 'system',
+        select: 'name availableRoles'
+      }
+    })
+    .select("-__v");
+
+  const response = {
+    success: true,
+    count: users.length,
+    data: users,
+  };
+  
+  // Salva no cache
+  if (redisClient && redisClient.isReady) {
+    await redisClient.set(cacheKey, JSON.stringify(response), { EX: 300 });
+  }
+
+  res.status(200).json(response);
+});
+
+// Função para deletar um usuário pelo ID (soft delete)
 exports.deleteUser = asyncHandler(async (req, res, next) => {
   // 1. Pegamos o ID que foi enviado na URL da requisição.
   const userId = req.params.id;
@@ -129,38 +133,51 @@ exports.deleteUser = asyncHandler(async (req, res, next) => {
   }
 
   // Usar uma transação para garantir que ou o usuário e suas permissões são deletados, ou nada é.
-  // Nota: Transações no MongoDB requerem um replica set.
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    // 2. Pedimos ao Mongoose para encontrar um usuário com esse ID e deletá-lo.
-    const user = await User.findByIdAndDelete(userId, { session });
+    // 2. Busca o usuário para verificar se existe
+    const user = await User.findById(userId, { session });
 
-    // 3. Verificamos se um usuário foi realmente encontrado e deletado.
+    // 3. Verificamos se um usuário foi realmente encontrado
     if (!user) {
       await session.abortTransaction();
       session.endSession();
       return res.status(404).json({ message: "Usuário não encontrado." });
     }
 
-    // 4. Deleta as permissões associadas a este usuário para manter a integridade dos dados.
-    await Permission.deleteMany({ user: userId }, { session });
+    // 4. Soft delete do usuário
+    await user.softDelete(req.user?._id); // req.user._id se você tiver autenticação
 
-    // 5. Invalida o cache de listagem de usuários
+    // 5. Soft delete das permissões associadas a este usuário
+    const permissions = await Permission.find({ user: userId }, { session });
+    for (const permission of permissions) {
+      await permission.softDelete(req.user?._id);
+    }
+
+    // 6. Invalida o cache de listagem de usuários
     const redisClient = getClient();
     if (redisClient && redisClient.isReady) {
       await redisClient.del("users:all_with_permissions");
+      await redisClient.del("permissions:all");
       console.log("Cache de usuários invalidado devido à deleção.");
     }
 
     await session.commitTransaction();
     session.endSession();
 
-    // 6. Se a deleção foi bem-sucedida, enviamos uma mensagem de sucesso.
+    // 7. Se a deleção foi bem-sucedida, enviamos uma mensagem de sucesso.
     res
       .status(200)
-      .json({ message: "Usuário e suas permissões deletados com sucesso." });
+      .json({ 
+        message: "Usuário e suas permissões deletados com sucesso.",
+        data: {
+          id: user._id,
+          deletedAt: user.deletedAt,
+          isActive: user.isActive
+        }
+      });
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
@@ -168,22 +185,125 @@ exports.deleteUser = asyncHandler(async (req, res, next) => {
   }
 });
 
-// Função para buscar um usuário pelo ID
-exports.getUserById = asyncHandler(async (req, res, next) => {
-  const { id } = req.params;
+// Função para restaurar um usuário deletado
+exports.restoreUser = asyncHandler(async (req, res, next) => {
+  const userId = req.params.id;
 
-  // Valida se o ID é um ObjectId válido do MongoDB
-  if (!mongoose.Types.ObjectId.isValid(id)) {
+  if (!mongoose.Types.ObjectId.isValid(userId)) {
     return res.status(400).json({ message: "ID de usuário inválido." });
   }
 
-  const user = await User.findById(id, { __v: 0 });
+  // Busca incluindo usuários deletados
+  const user = await User.findById(userId).setOptions({ includeDeleted: true });
 
   if (!user) {
     return res.status(404).json({ message: "Usuário não encontrado." });
   }
 
-  res.status(200).json(user);
+  if (user.isActive) {
+    return res.status(400).json({ message: "Este usuário já está ativo." });
+  }
+
+  // Restaura o usuário
+  await user.restore();
+
+  // Invalida cache
+  const redisClient = getClient();
+  if (redisClient && redisClient.isReady) {
+    await redisClient.del("users:all_with_permissions");
+    console.log("Cache de usuários invalidado devido à restauração.");
+  }
+
+  res.status(200).json({ 
+    success: true,
+    message: "Usuário restaurado com sucesso.",
+    data: user
+  });
+});
+
+// Função para listar usuários deletados (para administradores)
+exports.getDeletedUsers = asyncHandler(async (req, res, next) => {
+  const deletedUsers = await User.find({})
+    .setOptions({ includeDeleted: true })
+    .where({ isActive: false })
+    .select("-__v");
+
+  res.status(200).json({
+    success: true,
+    count: deletedUsers.length,
+    data: deletedUsers,
+  });
+});
+
+/**
+ * @desc    Buscar usuário por ID (apenas ativos)
+ * @route   GET /api/user/:id
+ */
+exports.getUserById = asyncHandler(async (req, res, next) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return res.status(400).json({ message: "ID de usuário inválido." });
+  }
+
+  const user = await User.findByIdActive(req.params.id)
+    .populate({
+      path: 'permissions',
+      match: { isActive: true, deletedAt: null },
+      populate: {
+        path: 'system',
+        select: 'name availableRoles',
+        match: { isActive: true, deletedAt: null }
+      }
+    })
+    .select("-__v");
+
+  if (!user) {
+    // Verifica se o usuário existe mas está deletado
+    const deletedUser = await User.findByIdIncludeDeleted(req.params.id);
+    if (deletedUser && !deletedUser.isActive) {
+      return res.status(404).json({ 
+        message: `Usuário com ID ${req.params.id} foi deletado.`,
+        deletedAt: deletedUser.deletedAt,
+        deletedBy: deletedUser.deletedBy
+      });
+    }
+    return res.status(404).json({ message: `Usuário com ID ${req.params.id} não encontrado.` });
+  }
+
+  res.status(200).json({ success: true, data: user });
+});
+
+/**
+ * @desc    Buscar usuário por ID (incluindo deletados) - para debug
+ * @route   GET /api/user/:id/debug
+ */
+exports.getUserByIdIncludeDeleted = asyncHandler(async (req, res, next) => {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+    return res.status(400).json({ message: "ID de usuário inválido." });
+  }
+
+  const user = await User.findByIdIncludeDeleted(req.params.id)
+    .populate({
+      path: 'permissions',
+      populate: {
+        path: 'system',
+        select: 'name availableRoles'
+      }
+    })
+    .select("-__v");
+
+  if (!user) {
+    return res.status(404).json({ message: `Usuário com ID ${req.params.id} não encontrado.` });
+  }
+
+  res.status(200).json({ 
+    success: true, 
+    data: user,
+    debug: {
+      isActive: user.isActive,
+      deletedAt: user.deletedAt,
+      deletedBy: user.deletedBy
+    }
+  });
 });
 
 // Função para atualizar um usuário pelo ID

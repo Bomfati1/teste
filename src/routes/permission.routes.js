@@ -2,8 +2,11 @@ const express = require("express");
 const {
   createOrUpdatePermission,
   getAllPermissions,
+  deletePermission,
+  restorePermission,
+  getDeletedPermissions,
 } = require("../controllers/permission.controller.js");
-const { body } = require("express-validator");
+const { body, param } = require("express-validator");
 const cache = require("../middleware/cache.js");
 
 const router = express.Router();
@@ -33,11 +36,27 @@ const permissionRules = [
     }),
 ];
 
+// Validação para IDs de permissão
+const permissionIdValidation = [
+  param("id").isMongoId().withMessage("ID de permissão inválido."),
+];
+
 // Rota para criar ou atualizar uma permissão
 // POST /api/permission
 router.post("/", permissionRules, createOrUpdatePermission);
 
-// Rota para listar todas as permissões, com cache de 60 segundos
-router.get("/", cache(60), getAllPermissions);
+// Rota para listar todas as permissões (SEM middleware de cache externo)
+router.get("/", getAllPermissions);
+
+// Rota para listar permissões deletadas (para administradores)
+router.get("/deleted", getDeletedPermissions);
+
+// Rota para deletar uma permissão (soft delete)
+// DELETE /api/permission/:id
+router.delete("/:id", permissionIdValidation, deletePermission);
+
+// Rota para restaurar uma permissão deletada
+// PATCH /api/permission/:id/restore
+router.patch("/:id/restore", permissionIdValidation, restorePermission);
 
 module.exports = router;

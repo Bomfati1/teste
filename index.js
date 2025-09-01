@@ -2,16 +2,64 @@ require("dotenv").config();
 const express = require("express");
 const connectDB = require("./src/config/db.js");
 const { connectRedis, isRedisAvailable } = require("./src/config/redis.js");
+const customBodyParser = require("./src/middleware/customBodyParser.js");
+const deleteHandler = require("./src/middleware/deleteHandler.js");
+const { 
+  createRateLimiter, 
+  corsOptions, 
+  helmetConfig, 
+  basicSecurity, 
+  validateIP, 
+  sanitizeData 
+} = require("./src/middleware/security.js");
+const config = require("./config.js");
 
 const systemRoutes = require("./src/routes/system.routes.js");
 const userRoutes = require("./src/routes/user.routes.js");
 const permissionRoutes = require("./src/routes/permission.routes.js");
 
 const app = express();
-const port = process.env.PORT || 5000;
+const port = config.port;
 
-// Middleware para parsear JSON
-app.use(express.json());
+// ========================================
+// MIDDLEWARES DE SEGURANÇA
+// ========================================
+
+// Helmet - Headers de segurança
+app.use(require('helmet')(helmetConfig));
+
+// CORS - Controle de origens
+app.use(require('cors')(corsOptions));
+
+// Rate Limiting - Limita requisições por IP
+const rateLimiter = createRateLimiter(
+  config.security.rateLimit.max,
+  config.security.rateLimit.windowMs
+);
+app.use(rateLimiter);
+
+// Segurança básica
+app.use(basicSecurity);
+
+// Validação de IP
+app.use(validateIP);
+
+// Sanitização de dados
+app.use(sanitizeData);
+
+// ========================================
+// MIDDLEWARES DE APLICAÇÃO
+// ========================================
+
+// Middleware customizado para parsear body (substitui o body-parser)
+app.use(customBodyParser);
+
+// Middleware específico para DELETE requests (mantemos para logs)
+app.use(deleteHandler);
+
+// ========================================
+// ROTAS
+// ========================================
 
 // Rota de teste para verificar se o servidor está funcionando
 app.get("/", (req, res) => {
@@ -19,7 +67,8 @@ app.get("/", (req, res) => {
     message: "API funcionando! 🚀",
     status: "online",
     timestamp: new Date().toISOString(),
-    cache: isRedisAvailable() ? "enabled" : "disabled"
+    cache: isRedisAvailable() ? "enabled" : "disabled",
+    environment: config.nodeEnv
   });
 });
 
@@ -29,7 +78,9 @@ app.get("/health", (req, res) => {
     status: "healthy",
     database: "connected",
     cache: isRedisAvailable() ? "connected" : "not available",
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    environment: config.nodeEnv,
+    version: "1.0.0"
   });
 });
 
@@ -38,22 +89,32 @@ app.use("/api/system", systemRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api/permission", permissionRoutes);
 
+// ========================================
+// MIDDLEWARE DE TRATAMENTO DE ERROS
+// ========================================
+
 // Middleware de tratamento de erros (deve ser o último)
 const errorHandler = require("./src/middleware/errorHandler.js");
 app.use(errorHandler);
+
+// ========================================
+// FUNÇÃO DE INICIALIZAÇÃO
+// ========================================
 
 // Função para iniciar o servidor
 const start = async () => {
   try {
     console.log("🚀 Iniciando a aplicação...");
+    console.log(`🌍 Ambiente: ${config.nodeEnv}`);
     
     // 1. Primeiro, tenta conectar ao banco de dados
     console.log("📊 Conectando ao MongoDB...");
-    await connectDB(process.env.MONGODB_URI);
+    console.log(`🔗 URI: ${config.mongodb.uri}`);
+    await connectDB(config.mongodb.uri);
     console.log("✅ Conectado ao MongoDB com sucesso.");
 
     // 2. Tenta conectar ao Redis apenas se a URL estiver configurada
-    const redisUrl = process.env.REDIS_URL;
+    const redisUrl = config.redis.url;
     if (redisUrl && redisUrl.trim() !== '') {
       console.log("🔴 Conectando ao Redis...");
       await connectRedis(redisUrl);
@@ -67,6 +128,7 @@ const start = async () => {
       console.log(`🌐 Servidor rodando em: http://localhost:${port}`);
       console.log(`📋 Health check: http://localhost:${port}/health`);
       console.log(`🔴 Cache Redis: ${isRedisAvailable() ? 'Ativo' : 'Inativo'}`);
+      console.log(`🛡️  Segurança: Ativa (Rate Limiting, Helmet, CORS)`);
       console.log("✨ API pronta para receber requisições!");
     });
     
