@@ -11,7 +11,7 @@ API robusta para cadastrar sistemas, gerenciar usuários e associar permissões,
 
 - **Gerenciamento de Sistemas**: Cadastre os sistemas que farão parte do ecossistema (ex: "Sistema de Atendimento", "Sistema de RH").
 - **Gerenciamento de Usuários**: Crie, liste, atualize e busque usuários.
-- **Gerenciamento de Permissões**: Associe usuários a sistemas com funções específicas (ex: `visualizar`, `editar`).
+- **Gerenciamento de Permissões**: Associe usuários a sistemas com funções específicas (ex: `admin", "user", "read", "write`).
 - **Soft Delete**: Usuários e permissões não são apagados permanentemente. Eles são desativados, permitindo recuperação e mantendo o histórico.
 - **Restauração de Dados**: Endpoints para restaurar usuários que foram desativados.
 - **Cache de Alta Performance**: Uso de Redis para cachear requisições frequentes (listagens), com invalidação automática em operações de escrita (`create`, `update`, `delete`).
