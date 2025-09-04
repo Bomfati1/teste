@@ -21,6 +21,9 @@ const systemValidationRules = [
 
 router.route("/").post(systemValidationRules, createSystem).get(getAllSystems);
 
+// Rota para listar sistemas deletados (para administradores)
+router.get("/deleted", getDeletedSystems);
+
 router
   .route("/:id")
   .get(getSystemById)
@@ -32,8 +35,5 @@ router.delete("/:id", deleteSystem);
 
 // Rota para restaurar um sistema deletado
 router.patch("/:id/restore", restoreSystem);
-
-// Rota para listar sistemas deletados (para administradores)
-router.get("/deleted", getDeletedSystems);
 
 module.exports = router;

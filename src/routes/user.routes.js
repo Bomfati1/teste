@@ -29,6 +29,9 @@ router.route("/").post(userValidationRules, createUser).get(getAllUsers);
 // Rota para listar TODOS os usuários (incluindo deletados)
 router.get("/all", getAllUsersIncludeDeleted);
 
+// Rota para listar usuários deletados (para administradores)
+router.get("/deleted", getDeletedUsers);
+
 router
   .route("/:id")
   .get(getUserById)
@@ -40,9 +43,6 @@ router.delete("/:id", deleteUser);
 
 // Rota para restaurar um usuário deletado
 router.patch("/:id/restore", restoreUser);
-
-// Rota para listar usuários deletados (para administradores)
-router.get("/deleted", getDeletedUsers);
 
 // Rota para buscar um usuário pelo ID (incluindo deletados para debug)
 router.get("/:id/debug", getUserByIdIncludeDeleted);

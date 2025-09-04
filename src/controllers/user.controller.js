@@ -38,7 +38,7 @@ exports.createUser = asyncHandler(async (req, res, next) => {
  */
 exports.getAllUsers = asyncHandler(async (req, res, next) => {
   const cacheKey = "users:all_with_permissions";
-  
+
   // Tenta buscar do cache primeiro
   const redisClient = getClient();
   if (redisClient && redisClient.isReady) {
@@ -48,19 +48,19 @@ exports.getAllUsers = asyncHandler(async (req, res, next) => {
       return res.status(200).json(JSON.parse(cachedData));
     }
   }
-  
+
   // Cache MISS - busca do banco usando método customizado
   res.setHeader("X-Cache", "MISS");
 
   const users = await User.findActive()
     .populate({
-      path: 'permissions',
+      path: "permissions",
       match: { isActive: true, deletedAt: null },
       populate: {
-        path: 'system',
-        select: 'name availableRoles',
-        match: { isActive: true, deletedAt: null }
-      }
+        path: "system",
+        select: "name availableRoles",
+        match: { isActive: true, deletedAt: null },
+      },
     })
     .select("-__v");
 
@@ -69,7 +69,7 @@ exports.getAllUsers = asyncHandler(async (req, res, next) => {
     count: users.length,
     data: users,
   };
-  
+
   // Salva no cache
   if (redisClient && redisClient.isReady) {
     await redisClient.set(cacheKey, JSON.stringify(response), { EX: 300 });
@@ -84,7 +84,7 @@ exports.getAllUsers = asyncHandler(async (req, res, next) => {
  */
 exports.getAllUsersIncludeDeleted = asyncHandler(async (req, res, next) => {
   const cacheKey = "users:all_with_permissions_include_deleted";
-  
+
   // Tenta buscar do cache primeiro
   const redisClient = getClient();
   if (redisClient && redisClient.isReady) {
@@ -94,17 +94,17 @@ exports.getAllUsersIncludeDeleted = asyncHandler(async (req, res, next) => {
       return res.status(200).json(JSON.parse(cachedData));
     }
   }
-  
+
   // Cache MISS - busca do banco usando método customizado
   res.setHeader("X-Cache", "MISS");
 
   const users = await User.findAll()
     .populate({
-      path: 'permissions',
+      path: "permissions",
       populate: {
-        path: 'system',
-        select: 'name availableRoles'
-      }
+        path: "system",
+        select: "name availableRoles",
+      },
     })
     .select("-__v");
 
@@ -113,7 +113,7 @@ exports.getAllUsersIncludeDeleted = asyncHandler(async (req, res, next) => {
     count: users.length,
     data: users,
   };
-  
+
   // Salva no cache
   if (redisClient && redisClient.isReady) {
     await redisClient.set(cacheKey, JSON.stringify(response), { EX: 300 });
@@ -138,7 +138,7 @@ exports.deleteUser = asyncHandler(async (req, res, next) => {
 
   try {
     // 2. Busca o usuário para verificar se existe
-    const user = await User.findById(userId, { session });
+    const user = await User.findById(userId).session(session);
 
     // 3. Verificamos se um usuário foi realmente encontrado
     if (!user) {
@@ -147,13 +147,21 @@ exports.deleteUser = asyncHandler(async (req, res, next) => {
       return res.status(404).json({ message: "Usuário não encontrado." });
     }
 
-    // 4. Soft delete do usuário
-    await user.softDelete(req.user?._id); // req.user._id se você tiver autenticação
+    // 4. Soft delete do usuário (dentro da transação)
+    user.isActive = false;
+    user.deletedAt = new Date();
+    user.deletedBy = req.user?._id || null;
+    await user.save({ session });
 
     // 5. Soft delete das permissões associadas a este usuário
-    const permissions = await Permission.find({ user: userId }, { session });
+    const permissions = await Permission.find({ user: userId }).session(
+      session
+    );
     for (const permission of permissions) {
-      await permission.softDelete(req.user?._id);
+      permission.isActive = false;
+      permission.deletedAt = new Date();
+      permission.deletedBy = req.user?._id || null;
+      await permission.save({ session });
     }
 
     // 6. Invalida o cache de listagem de usuários
@@ -168,16 +176,14 @@ exports.deleteUser = asyncHandler(async (req, res, next) => {
     session.endSession();
 
     // 7. Se a deleção foi bem-sucedida, enviamos uma mensagem de sucesso.
-    res
-      .status(200)
-      .json({ 
-        message: "Usuário e suas permissões deletados com sucesso.",
-        data: {
-          id: user._id,
-          deletedAt: user.deletedAt,
-          isActive: user.isActive
-        }
-      });
+    res.status(200).json({
+      message: "Usuário e suas permissões deletados com sucesso.",
+      data: {
+        id: user._id,
+        deletedAt: user.deletedAt,
+        isActive: user.isActive,
+      },
+    });
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
@@ -214,10 +220,10 @@ exports.restoreUser = asyncHandler(async (req, res, next) => {
     console.log("Cache de usuários invalidado devido à restauração.");
   }
 
-  res.status(200).json({ 
+  res.status(200).json({
     success: true,
     message: "Usuário restaurado com sucesso.",
-    data: user
+    data: user,
   });
 });
 
@@ -246,13 +252,13 @@ exports.getUserById = asyncHandler(async (req, res, next) => {
 
   const user = await User.findByIdActive(req.params.id)
     .populate({
-      path: 'permissions',
+      path: "permissions",
       match: { isActive: true, deletedAt: null },
       populate: {
-        path: 'system',
-        select: 'name availableRoles',
-        match: { isActive: true, deletedAt: null }
-      }
+        path: "system",
+        select: "name availableRoles",
+        match: { isActive: true, deletedAt: null },
+      },
     })
     .select("-__v");
 
@@ -260,13 +266,15 @@ exports.getUserById = asyncHandler(async (req, res, next) => {
     // Verifica se o usuário existe mas está deletado
     const deletedUser = await User.findByIdIncludeDeleted(req.params.id);
     if (deletedUser && !deletedUser.isActive) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         message: `Usuário com ID ${req.params.id} foi deletado.`,
         deletedAt: deletedUser.deletedAt,
-        deletedBy: deletedUser.deletedBy
+        deletedBy: deletedUser.deletedBy,
       });
     }
-    return res.status(404).json({ message: `Usuário com ID ${req.params.id} não encontrado.` });
+    return res
+      .status(404)
+      .json({ message: `Usuário com ID ${req.params.id} não encontrado.` });
   }
 
   res.status(200).json({ success: true, data: user });
@@ -283,26 +291,28 @@ exports.getUserByIdIncludeDeleted = asyncHandler(async (req, res, next) => {
 
   const user = await User.findByIdIncludeDeleted(req.params.id)
     .populate({
-      path: 'permissions',
+      path: "permissions",
       populate: {
-        path: 'system',
-        select: 'name availableRoles'
-      }
+        path: "system",
+        select: "name availableRoles",
+      },
     })
     .select("-__v");
 
   if (!user) {
-    return res.status(404).json({ message: `Usuário com ID ${req.params.id} não encontrado.` });
+    return res
+      .status(404)
+      .json({ message: `Usuário com ID ${req.params.id} não encontrado.` });
   }
 
-  res.status(200).json({ 
-    success: true, 
+  res.status(200).json({
+    success: true,
     data: user,
     debug: {
       isActive: user.isActive,
       deletedAt: user.deletedAt,
-      deletedBy: user.deletedBy
-    }
+      deletedBy: user.deletedBy,
+    },
   });
 });
 

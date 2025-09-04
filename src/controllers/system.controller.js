@@ -5,8 +5,6 @@ const { validationResult } = require("express-validator");
 const mongoose = require("mongoose");
 const { getClient } = require("../config/redis");
 
-// @desc    Criar um novo sistema
-// @route   POST /api/system
 exports.createSystem = asyncHandler(async (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -23,22 +21,20 @@ exports.createSystem = asyncHandler(async (req, res, next) => {
   }
 
   const system = await System.create({ name, description });
-  
+
   // Invalida o cache de sistemas
   const redisClient = getClient();
   if (redisClient && redisClient.isReady) {
     await redisClient.del("systems:all");
     console.log("Cache de sistemas invalidado devido à criação.");
   }
-  
+
   res.status(201).json({ success: true, data: system });
 });
 
-// @desc    Listar todos os sistemas
-// @route   GET /api/system
 exports.getAllSystems = asyncHandler(async (req, res, next) => {
   const cacheKey = "systems:all";
-  
+
   // Tenta buscar do cache primeiro
   const redisClient = getClient();
   if (redisClient && redisClient.isReady) {
@@ -49,20 +45,20 @@ exports.getAllSystems = asyncHandler(async (req, res, next) => {
       return res.status(200).json(JSON.parse(cachedData));
     }
   }
-  
+
   // Cache MISS - busca do banco
   console.log("Cache MISS. Buscando sistemas do MongoDB.");
   res.setHeader("X-Cache", "MISS");
-  
+
   const systems = await System.find({}, { __v: 0 });
   const response = { success: true, count: systems.length, data: systems };
-  
+
   // Salva no cache
   if (redisClient && redisClient.isReady) {
     await redisClient.set(cacheKey, JSON.stringify(response), { EX: 300 });
     console.log("Resultado da listagem de sistemas salvo no cache.");
   }
-  
+
   res.status(200).json(response);
 });
 
@@ -74,7 +70,7 @@ exports.getSystemById = asyncHandler(async (req, res, next) => {
   }
 
   const cacheKey = `system:${req.params.id}`;
-  
+
   // Tenta buscar do cache primeiro
   const redisClient = getClient();
   if (redisClient && redisClient.isReady) {
@@ -85,7 +81,7 @@ exports.getSystemById = asyncHandler(async (req, res, next) => {
       return res.status(200).json(JSON.parse(cachedData));
     }
   }
-  
+
   // Cache MISS - busca do banco
   console.log("Cache MISS. Buscando sistema por ID do MongoDB.");
   res.setHeader("X-Cache", "MISS");
@@ -98,7 +94,7 @@ exports.getSystemById = asyncHandler(async (req, res, next) => {
   }
 
   const response = { success: true, data: system };
-  
+
   // Salva no cache
   if (redisClient && redisClient.isReady) {
     await redisClient.set(cacheKey, JSON.stringify(response), { EX: 300 });
@@ -152,8 +148,8 @@ exports.deleteSystem = asyncHandler(async (req, res, next) => {
   const system = await System.findById(req.params.id);
 
   if (!system) {
-    return res.status(404).json({ 
-      message: `Sistema com ID ${req.params.id} não encontrado.` 
+    return res.status(404).json({
+      message: `Sistema com ID ${req.params.id} não encontrado.`,
     });
   }
 
@@ -177,14 +173,14 @@ exports.deleteSystem = asyncHandler(async (req, res, next) => {
     console.log("Cache de sistemas invalidado devido à deleção.");
   }
 
-  res.status(200).json({ 
-    success: true, 
+  res.status(200).json({
+    success: true,
     message: "Sistema deletado com sucesso.",
     data: {
       id: system._id,
       deletedAt: system.deletedAt,
-      isActive: system.isActive
-    }
+      isActive: system.isActive,
+    },
   });
 });
 
@@ -196,17 +192,19 @@ exports.restoreSystem = asyncHandler(async (req, res, next) => {
   }
 
   // Busca incluindo sistemas deletados
-  const system = await System.findById(req.params.id).setOptions({ includeDeleted: true });
+  const system = await System.findById(req.params.id).setOptions({
+    includeDeleted: true,
+  });
 
   if (!system) {
-    return res.status(404).json({ 
-      message: `Sistema com ID ${req.params.id} não encontrado.` 
+    return res.status(404).json({
+      message: `Sistema com ID ${req.params.id} não encontrado.`,
     });
   }
 
   if (system.isActive) {
-    return res.status(400).json({ 
-      message: "Este sistema já está ativo." 
+    return res.status(400).json({
+      message: "Este sistema já está ativo.",
     });
   }
 
@@ -221,10 +219,10 @@ exports.restoreSystem = asyncHandler(async (req, res, next) => {
     console.log("Cache de sistemas invalidado devido à restauração.");
   }
 
-  res.status(200).json({ 
-    success: true, 
+  res.status(200).json({
+    success: true,
     message: "Sistema restaurado com sucesso.",
-    data: system
+    data: system,
   });
 });
 
